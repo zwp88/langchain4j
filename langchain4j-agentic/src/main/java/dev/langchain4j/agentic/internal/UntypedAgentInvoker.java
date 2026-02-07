@@ -3,15 +3,21 @@ package dev.langchain4j.agentic.internal;
 import dev.langchain4j.agentic.scope.AgenticScope;
 import java.lang.reflect.Method;
 
-public record UntypedAgentInvoker(Method method, String name, String description, String outputName, boolean async) implements AgentInvoker {
+public final class UntypedAgentInvoker extends AbstractAgentInvoker {
 
-    @Override
-    public String toCard() {
-        return "{" + name + ": " + description + "}";
+    public UntypedAgentInvoker(Method method, InternalAgent agent) {
+        super(method, agent);
     }
 
     @Override
-    public Object[] toInvocationArguments(AgenticScope agenticScope) {
-        return new Object[] { agenticScope.state() };
+    public AgentInvocationArguments toInvocationArguments(AgenticScope agenticScope) {
+        return new AgentInvocationArguments(agenticScope.state(), new Object[]{agenticScope.state()});
+    }
+
+    @Override
+    public String toString() {
+        return "UntypedAgentInvoker[" +
+                "method=" + method + ", " +
+                "agent=" + agent + ']';
     }
 }

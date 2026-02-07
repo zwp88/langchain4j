@@ -3,13 +3,13 @@ package dev.langchain4j.http.client;
 import static dev.langchain4j.internal.ValidationUtils.ensureNotEmpty;
 import static dev.langchain4j.internal.ValidationUtils.ensureNotNull;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import dev.langchain4j.Internal;
 import dev.langchain4j.http.client.sse.ServerSentEvent;
 import dev.langchain4j.http.client.sse.ServerSentEventListener;
 import dev.langchain4j.http.client.sse.ServerSentEventParser;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 @Internal
 public class MockHttpClient implements HttpClient {
@@ -30,6 +30,11 @@ public class MockHttpClient implements HttpClient {
 
     public MockHttpClient(List<ServerSentEvent> events) {
         this.response = null;
+        this.events = ensureNotEmpty(events, "events");
+    }
+
+    public MockHttpClient(SuccessfulHttpResponse response, List<ServerSentEvent> events) {
+        this.response = ensureNotNull(response, "response");
         this.events = ensureNotEmpty(events, "events");
     }
 
@@ -65,5 +70,9 @@ public class MockHttpClient implements HttpClient {
 
     public static MockHttpClient thatAlwaysResponds(List<ServerSentEvent> events) {
         return new MockHttpClient(events);
+    }
+
+    public static MockHttpClient thatAlwaysResponds(SuccessfulHttpResponse response, List<ServerSentEvent> events) {
+        return new MockHttpClient(response, events);
     }
 }

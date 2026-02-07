@@ -9,6 +9,7 @@ import static java.util.stream.Collectors.toList;
 import dev.langchain4j.Internal;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.http.client.SuccessfulHttpResponse;
 import dev.langchain4j.http.client.sse.ServerSentEvent;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.openai.internal.ParsedAndRawResponse;
@@ -54,16 +55,23 @@ public class OpenAiStreamingResponseBuilder {
     private final AtomicReference<String> systemFingerprint = new AtomicReference<>();
     private final AtomicReference<TokenUsage> tokenUsage = new AtomicReference<>();
     private final AtomicReference<FinishReason> finishReason = new AtomicReference<>();
+    private final AtomicReference<SuccessfulHttpResponse> rawHttpResponse = new AtomicReference<>();
     private final Queue<ServerSentEvent> rawServerSentEvents = new ConcurrentLinkedQueue<>();
 
     private final boolean returnThinking;
+    private final boolean accumulateToolCallId;
 
     public OpenAiStreamingResponseBuilder() {
-        this(false);
+        this(false, true);
     }
 
     public OpenAiStreamingResponseBuilder(boolean returnThinking) {
+        this(returnThinking, true);
+    }
+
+    public OpenAiStreamingResponseBuilder(boolean returnThinking, boolean accumulateToolCallId) {
         this.returnThinking = returnThinking;
+        this.accumulateToolCallId = accumulateToolCallId;
         if (returnThinking) {
             this.reasoningContentBuilder = new StringBuffer();
         } else {
@@ -73,6 +81,9 @@ public class OpenAiStreamingResponseBuilder {
 
     public void append(ParsedAndRawResponse<ChatCompletionResponse> parsedAndRawResponse) {
         if (parsedAndRawResponse != null) {
+            if (parsedAndRawResponse.rawHttpResponse() != null) {
+                rawHttpResponse.set(parsedAndRawResponse.rawHttpResponse());
+            }
             if (parsedAndRawResponse.rawServerSentEvent() != null) {
                 rawServerSentEvents.add(parsedAndRawResponse.rawServerSentEvent());
             }
@@ -156,7 +167,12 @@ public class OpenAiStreamingResponseBuilder {
                     toolCall.index(), idx -> new ToolExecutionRequestBuilder());
 
             if (toolCall.id() != null) {
-                builder.idBuilder.append(toolCall.id());
+                if (accumulateToolCallId) {
+                    builder.idBuilder.append(toolCall.id());
+                } else {
+                    builder.idBuilder.setLength(0);
+                    builder.idBuilder.append(toolCall.id());
+                }
             }
 
             FunctionCall functionCall = toolCall.function();
@@ -258,6 +274,7 @@ public class OpenAiStreamingResponseBuilder {
                 .created(created.get())
                 .serviceTier(serviceTier.get())
                 .systemFingerprint(systemFingerprint.get())
+                .rawHttpResponse(rawHttpResponse.get())
                 .rawServerSentEvents(new ArrayList<>(rawServerSentEvents))
                 .build();
     }

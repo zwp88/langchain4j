@@ -6,18 +6,20 @@ import static dev.langchain4j.internal.ValidationUtils.ensureNotNull;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.langchain4j.mcp.client.protocol.McpClientMessage;
-import dev.langchain4j.mcp.client.protocol.McpInitializationNotification;
-import dev.langchain4j.mcp.client.protocol.McpInitializeRequest;
+import dev.langchain4j.mcp.client.McpCallContext;
+import dev.langchain4j.mcp.client.McpHeadersSupplier;
 import dev.langchain4j.mcp.client.transport.McpOperationHandler;
 import dev.langchain4j.mcp.client.transport.McpTransport;
+import dev.langchain4j.mcp.protocol.McpClientMessage;
+import dev.langchain4j.mcp.protocol.McpInitializationNotification;
+import dev.langchain4j.mcp.protocol.McpInitializeRequest;
+import dev.langchain4j.mcp.protocol.McpJsonRpcMessage;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.net.http.HttpResponse.BodySubscriber;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
@@ -25,33 +27,44 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import javax.net.ssl.SSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class StreamableHttpMcpTransport implements McpTransport {
 
-    private static final Logger log = LoggerFactory.getLogger(StreamableHttpMcpTransport.class);
+    private static final Logger DEFAULT_TRAFFIC_LOG = LoggerFactory.getLogger("MCP");
+    private static final Logger LOG = LoggerFactory.getLogger(StreamableHttpMcpTransport.class);
     private final String url;
-    private final Map<String, String> customHeaders;
+    private final McpHeadersSupplier customHeadersSupplier;
     private final boolean logResponses;
     private final boolean logRequests;
+    private final Logger trafficLog;
     static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
+    private final AtomicReference<CompletableFuture<JsonNode>> initializeInProgress = new AtomicReference<>(null);
     private volatile McpOperationHandler operationHandler;
     private final HttpClient httpClient;
+    private final SSLContext sslContext;
+    private McpInitializeRequest initializeRequest;
     private final AtomicReference<String> mcpSessionId = new AtomicReference<>();
 
     public StreamableHttpMcpTransport(StreamableHttpMcpTransport.Builder builder) {
         url = ensureNotNull(builder.url, "Missing server endpoint URL");
         logRequests = builder.logRequests;
         logResponses = builder.logResponses;
+        trafficLog = getOrDefault(builder.logger, DEFAULT_TRAFFIC_LOG);
         Duration timeout = getOrDefault(builder.timeout, Duration.ofSeconds(60));
-        customHeaders = getOrDefault(builder.customHeaders, Map.of());
-        HttpClient.Builder clientBuilder = HttpClient.newBuilder();
+        customHeadersSupplier = getOrDefault(builder.customHeadersSupplier, (i) -> Map.of());
+        sslContext = builder.sslContext;
+        HttpClient.Builder clientBuilder = HttpClient.newBuilder().connectTimeout(timeout);
         if (builder.executor != null) {
             clientBuilder.executor(builder.executor);
         }
-        httpClient = clientBuilder.connectTimeout(timeout).build();
+        if (sslContext != null) {
+            clientBuilder.sslContext(sslContext);
+        }
+        httpClient = clientBuilder.build();
     }
 
     @Override
@@ -61,23 +74,35 @@ public class StreamableHttpMcpTransport implements McpTransport {
 
     @Override
     public CompletableFuture<JsonNode> initialize(McpInitializeRequest operation) {
-        return execute(operation, operation.getId())
-                .thenCompose(originalResponse -> execute(new McpInitializationNotification(), null)
+        this.initializeRequest = operation;
+        CompletableFuture<JsonNode> completableFuture = execute(new McpCallContext(null, operation), false);
+        initializeInProgress.set(completableFuture);
+        return completableFuture
+                .thenCompose(originalResponse -> {
+                    initializeInProgress.set(null);
+                    return CompletableFuture.completedFuture(originalResponse);
+                })
+                .thenCompose(originalResponse -> execute(
+                                new McpCallContext(null, new McpInitializationNotification()), false)
                         .thenCompose(nullNode -> CompletableFuture.completedFuture(originalResponse)));
     }
 
-    private HttpRequest createRequest(McpClientMessage message) throws JsonProcessingException {
+    private HttpRequest createRequest(McpJsonRpcMessage message, McpCallContext callContext)
+            throws JsonProcessingException {
         String body = OBJECT_MAPPER.writeValueAsString(message);
         HttpRequest.BodyPublisher bodyPublisher = HttpRequest.BodyPublishers.ofString(body);
         if (logRequests) {
-            log.info("Request: " + body);
+            trafficLog.info("Request: {}", body);
         }
         final HttpRequest.Builder builder = HttpRequest.newBuilder();
         String sessionId = mcpSessionId.get();
-        if (sessionId != null) {
+        if (sessionId != null && !(message instanceof McpInitializeRequest)) {
             builder.header("Mcp-Session-Id", sessionId);
         }
-        customHeaders.forEach(builder::header);
+        Map<String, String> headers = customHeadersSupplier.apply(callContext);
+        if (headers != null) {
+            headers.forEach(builder::header);
+        }
         return builder.uri(URI.create(url))
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json,text/event-stream")
@@ -87,12 +112,22 @@ public class StreamableHttpMcpTransport implements McpTransport {
 
     @Override
     public CompletableFuture<JsonNode> executeOperationWithResponse(McpClientMessage operation) {
-        return execute(operation, operation.getId());
+        return executeOperationWithResponse(new McpCallContext(null, operation));
+    }
+
+    @Override
+    public CompletableFuture<JsonNode> executeOperationWithResponse(McpCallContext context) {
+        return execute(context, false);
     }
 
     @Override
     public void executeOperationWithoutResponse(McpClientMessage operation) {
-        execute(operation, null);
+        executeOperationWithoutResponse(new McpCallContext(null, operation));
+    }
+
+    @Override
+    public void executeOperationWithoutResponse(McpCallContext context) {
+        execute(context, false);
     }
 
     @Override
@@ -105,10 +140,18 @@ public class StreamableHttpMcpTransport implements McpTransport {
         // nothing to do here, we don't maintain a long-running SSE channel (yet)
     }
 
-    private CompletableFuture<JsonNode> execute(McpClientMessage message, Long id) {
+    private CompletableFuture<JsonNode> execute(McpCallContext context, boolean isRetry) {
+        Long id = context.message().getId();
+        if (!(context.message() instanceof McpInitializeRequest)) {
+            CompletableFuture<JsonNode> reinitializeInProgress = this.initializeInProgress.get();
+            if (reinitializeInProgress != null) {
+                reinitializeInProgress.join();
+            }
+        }
         HttpRequest request = null;
         try {
-            request = createRequest(message);
+            request = createRequest(
+                    context.message(), new McpCallContext(context.invocationContext(), context.message()));
         } catch (JsonProcessingException e) {
             return CompletableFuture.failedFuture(e);
         }
@@ -118,49 +161,61 @@ public class StreamableHttpMcpTransport implements McpTransport {
         }
 
         httpClient
-                .sendAsync(request, new HttpResponse.BodyHandler<Void>() {
-
-                    @Override
-                    public BodySubscriber<Void> apply(HttpResponse.ResponseInfo responseInfo) {
-                        if (!isExpectedStatusCode(responseInfo.statusCode())) {
-                            future.completeExceptionally(
-                                    new RuntimeException("Unexpected status code: " + responseInfo.statusCode()));
-                            return null;
-                        } else {
-                            Optional<String> contentType =
-                                    responseInfo.headers().firstValue("Content-Type");
-                            Optional<String> mcpSessionId =
-                                    responseInfo.headers().firstValue("Mcp-Session-Id");
-                            if (mcpSessionId.isPresent()) {
-                                log.debug("Assigned MCP session ID: " + mcpSessionId);
-                                StreamableHttpMcpTransport.this.mcpSessionId.set(mcpSessionId.get());
-                            }
-                            if (id != null
-                                    && contentType.isPresent()
-                                    && contentType.get().contains("text/event-stream")) {
-                                // the server has started an SSE stream
-                                return HttpResponse.BodySubscribers.fromLineSubscriber(
-                                        new SseSubscriber(future, logResponses, operationHandler));
-                            } else {
-                                // the server has returned a regular HTTP response
-                                return HttpResponse.BodySubscribers.mapping(
-                                        HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8), responseBody -> {
-                                            if (logResponses) {
-                                                log.info("Response: " + responseBody);
-                                            }
-                                            if (id == null) {
-                                                future.complete(null);
-                                            }
-                                            try {
-                                                JsonNode node = OBJECT_MAPPER.readTree(responseBody);
-                                                operationHandler.handle(node);
-                                                return null;
-                                            } catch (IOException e) {
-                                                future.completeExceptionally(e);
-                                                return null;
-                                            }
+                .sendAsync(request, responseInfo -> {
+                    if (!isExpectedStatusCode(responseInfo.statusCode())) {
+                        if (!(context.message() instanceof McpInitializeRequest) && responseInfo.statusCode() == 404) {
+                            if (!isRetry) {
+                                initialize(StreamableHttpMcpTransport.this.initializeRequest)
+                                        .thenAccept(node -> {
+                                            execute(context, true)
+                                                    .thenAccept(future::complete)
+                                                    .exceptionally(t -> {
+                                                        future.completeExceptionally(t);
+                                                        return null;
+                                                    });
+                                        })
+                                        .exceptionally(t -> {
+                                            future.completeExceptionally(t);
+                                            return null;
                                         });
                             }
+                        } else {
+                            future.completeExceptionally(
+                                    new RuntimeException("Unexpected status code: " + responseInfo.statusCode()));
+                        }
+                        return HttpResponse.BodySubscribers.discarding();
+                    } else {
+                        Optional<String> contentType = responseInfo.headers().firstValue("Content-Type");
+                        Optional<String> mcpSessionId = responseInfo.headers().firstValue("Mcp-Session-Id");
+                        if (mcpSessionId.isPresent()) {
+                            LOG.debug("Assigned MCP session ID: {}", mcpSessionId);
+                            StreamableHttpMcpTransport.this.mcpSessionId.set(mcpSessionId.get());
+                        }
+                        if (id != null
+                                && contentType.isPresent()
+                                && contentType.get().contains("text/event-stream")) {
+                            // the server has started an SSE stream
+                            return HttpResponse.BodySubscribers.fromLineSubscriber(
+                                    new SseSubscriber(future, logResponses, operationHandler, trafficLog));
+                        } else {
+                            // the server has returned a regular HTTP response
+                            return HttpResponse.BodySubscribers.mapping(
+                                    HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8), responseBody -> {
+                                        if (logResponses) {
+                                            trafficLog.info("Response: {}", responseBody);
+                                        }
+                                        if (id == null) {
+                                            future.complete(null);
+                                        }
+                                        try {
+                                            JsonNode node = OBJECT_MAPPER.readTree(responseBody);
+                                            operationHandler.handle(node);
+                                            return null;
+                                        } catch (IOException e) {
+                                            future.completeExceptionally(e);
+                                            return null;
+                                        }
+                                    });
                         }
                     }
                 })
@@ -185,14 +240,20 @@ public class StreamableHttpMcpTransport implements McpTransport {
         }
     }
 
+    public static Builder builder() {
+        return new Builder();
+    }
+
     public static class Builder {
 
         private Executor executor;
         private String url;
-        private Map<String, String> customHeaders;
+        private McpHeadersSupplier customHeadersSupplier;
         private Duration timeout;
         private boolean logRequests = false;
         private boolean logResponses = false;
+        private Logger logger;
+        private SSLContext sslContext;
 
         /**
          * The URL of the MCP server.
@@ -206,7 +267,25 @@ public class StreamableHttpMcpTransport implements McpTransport {
          * The request headers of the MCP server.
          */
         public StreamableHttpMcpTransport.Builder customHeaders(Map<String, String> customHeaders) {
-            this.customHeaders = customHeaders;
+            this.customHeadersSupplier = (i) -> customHeaders;
+            return this;
+        }
+
+        /**
+         * A supplier for dynamic request headers of the MCP server.
+         * The supplier is called for each request, allowing headers to be updated dynamically.
+         */
+        public StreamableHttpMcpTransport.Builder customHeaders(Supplier<Map<String, String>> customHeadersSupplier) {
+            this.customHeadersSupplier = i -> customHeadersSupplier.get();
+            return this;
+        }
+
+        /**
+         * A supplier for dynamic request headers of the MCP server.
+         * The supplier is called for each request, allowing headers to be updated dynamically.
+         */
+        public StreamableHttpMcpTransport.Builder customHeaders(McpHeadersSupplier customHeadersSupplier) {
+            this.customHeadersSupplier = customHeadersSupplier;
             return this;
         }
 
@@ -236,10 +315,32 @@ public class StreamableHttpMcpTransport implements McpTransport {
         }
 
         /**
+         * Sets a custom {@link Logger} to be used for traffic logging (both requests and responses).
+         * This logger will be used for both regular HTTP responses and Server-Sent Events (SSE) traffic.
+         * If not specified, a default logger will be used.
+         *
+         * @param logger an alternate {@link Logger} to be used instead of the default one provided by Langchain4J for traffic logging.
+         * @return {@code this}.
+         */
+        public StreamableHttpMcpTransport.Builder logger(Logger logger) {
+            this.logger = logger;
+            return this;
+        }
+
+        /**
          * An optional {@link Executor} that will be used for executing requests and handling responses.
          */
         public StreamableHttpMcpTransport.Builder executor(Executor executor) {
             this.executor = executor;
+            return this;
+        }
+
+        /**
+         * Supplies a custom {@link SSLContext} used when establishing HTTPS connections to the MCP server,
+         * allowing private CAs or certificates.
+         */
+        public StreamableHttpMcpTransport.Builder sslContext(SSLContext sslContext) {
+            this.sslContext = sslContext;
             return this;
         }
 

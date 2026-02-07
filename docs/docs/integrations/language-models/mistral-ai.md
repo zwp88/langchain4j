@@ -16,21 +16,21 @@ For Maven project `pom.xml`
 <dependency>
     <groupId>dev.langchain4j</groupId>
     <artifactId>langchain4j</artifactId>
-    <version>1.4.0</version>
+    <version>1.11.0</version>
 </dependency>
 
 <dependency>
     <groupId>dev.langchain4j</groupId>
     <artifactId>langchain4j-mistral-ai</artifactId>
-    <version>1.4.0</version>
+    <version>1.11.0</version>
 </dependency>
 ```
 
 For Gradle project `build.gradle`
 
 ```groovy
-implementation 'dev.langchain4j:langchain4j:1.4.0'
-implementation 'dev.langchain4j:langchain4j-mistral-ai:1.4.0'
+implementation 'dev.langchain4j:langchain4j:1.11.0'
+implementation 'dev.langchain4j:langchain4j-mistral-ai:1.11.0'
 ```
 ### API Key setup
 Add your MistralAI API key to your project, you can create a class ```ApiKeys.java``` with the following code
@@ -183,7 +183,7 @@ public class PaymentTransactionTool {
             "transaction_id", List.of("T1001", "T1002", "T1003", "T1004", "T1005"),
             "customer_id", List.of("C001", "C002", "C003", "C002", "C001"),
             "payment_amount", List.of("125.50", "89.99", "120.00", "54.30", "210.20"),
-            "payment_date", List.of("2021-10-05", "2021-10-06", "2021-10-07", "2021-10-05", "2021-10-08"),
+            "payment_date", List.of("2021.11.05", "2021.11.06", "2021.11.07", "2021.11.05", "2021.11.08"),
             "payment_status", List.of("Paid", "Unpaid", "Paid", "Paid", "Pending"));
    
     ...
@@ -279,7 +279,7 @@ The status of transaction T1005 is Pending. The payment date is October 8, 2021.
 ### JSON mode
 You can also use the JSON mode to get the response in JSON format. To do this, you need to set the `responseFormat` parameter to `ResponseFormat.JSON`  in the `MistralAiChatModel` builder OR `MistralAiStreamingChatModel` builder.
 
-Syncronous example:
+Synchronous example:
 
 ```java
 ChatModel model = MistralAiChatModel.builder()
@@ -363,7 +363,7 @@ ChatModel model = MistralAiChatModel.builder()
 ### Guardrailing
 Guardrails are a way to limit the behavior of the model to prevent it from generating harmful or unwanted content. You can set optionally `safePrompt` parameter in the `MistralAiChatModel` builder or `MistralAiStreamingChatModel` builder.
 
-Syncronous example:
+Synchronous example:
 
 ```java
 ChatModel model = MistralAiChatModel.builder()

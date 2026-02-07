@@ -1,14 +1,16 @@
 package dev.langchain4j.model.anthropic.internal.api;
 
-import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL;
+import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY;
 
+import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies.SnakeCaseStrategy;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import java.util.List;
+import java.util.Map;
 
-@JsonInclude(NON_NULL)
+@JsonInclude(NON_EMPTY)
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonNaming(SnakeCaseStrategy.class)
 public class AnthropicCreateMessageRequest {
@@ -24,11 +26,32 @@ public class AnthropicCreateMessageRequest {
     public Integer topK;
     public List<AnthropicTool> tools;
     public AnthropicToolChoice toolChoice;
+    public AnthropicOutputConfig outputConfig;
     public AnthropicThinking thinking;
     public AnthropicMetadata metadata;
+    public Map<String, Object> customParameters;
 
     public AnthropicCreateMessageRequest() {}
 
+    public AnthropicCreateMessageRequest(Builder builder) {
+        this.model = builder.model;
+        this.messages = builder.messages;
+        this.system = builder.system;
+        this.maxTokens = builder.maxTokens;
+        this.stopSequences = builder.stopSequences;
+        this.stream = builder.stream;
+        this.temperature = builder.temperature;
+        this.topP = builder.topP;
+        this.topK = builder.topK;
+        this.tools = builder.tools;
+        this.toolChoice = builder.toolChoice;
+        this.outputConfig = builder.outputConfig;
+        this.thinking = builder.thinking;
+        this.metadata = builder.metadata;
+        this.customParameters = builder.customParameters;
+    }
+
+    @Deprecated(since = "1.7.0-beta13", forRemoval = true)
     public AnthropicCreateMessageRequest(
             String model,
             List<AnthropicMessage> messages,
@@ -146,6 +169,14 @@ public class AnthropicCreateMessageRequest {
         this.toolChoice = toolChoice;
     }
 
+    public AnthropicOutputConfig getOutputConfig() {
+        return outputConfig;
+    }
+
+    public void setOutputConfig(AnthropicOutputConfig outputConfig) {
+        this.outputConfig = outputConfig;
+    }
+
     public AnthropicThinking getThinking() {
         return thinking;
     }
@@ -160,6 +191,15 @@ public class AnthropicCreateMessageRequest {
 
     public void setMetadata(AnthropicMetadata metadata) {
         this.metadata = metadata;
+    }
+
+    @JsonAnyGetter
+    public Map<String, Object> getCustomParameters() {
+        return customParameters;
+    }
+
+    public void setCustomParameters(Map<String, Object> customParameters) {
+        this.customParameters = customParameters;
     }
 
     public static Builder builder() {
@@ -179,8 +219,10 @@ public class AnthropicCreateMessageRequest {
                         .topK(this.topK)
                         .tools(this.tools)
                         .toolChoice(this.toolChoice)
+                        .outputConfig(this.outputConfig)
                         .thinking(this.thinking)
-                        .metadata(this.metadata);
+                        .metadata(this.metadata)
+                        .customParameters(this.customParameters);
     }
 
     public static class Builder {
@@ -196,8 +238,10 @@ public class AnthropicCreateMessageRequest {
         private Integer topK;
         private List<AnthropicTool> tools;
         private AnthropicToolChoice toolChoice;
+        private AnthropicOutputConfig outputConfig;
         private AnthropicThinking thinking;
         private AnthropicMetadata metadata;
+        private Map<String, Object> customParameters;
 
         public Builder model(String model) {
             this.model = model;
@@ -254,6 +298,11 @@ public class AnthropicCreateMessageRequest {
             return this;
         }
 
+        public Builder outputConfig(AnthropicOutputConfig outputConfig) {
+            this.outputConfig = outputConfig;
+            return this;
+        }
+
         public Builder thinking(AnthropicThinking thinking) {
             this.thinking = thinking;
             return this;
@@ -264,21 +313,13 @@ public class AnthropicCreateMessageRequest {
             return this;
         }
 
+        public Builder customParameters(Map<String, Object> customParameters) {
+            this.customParameters = customParameters;
+            return this;
+        }
+
         public AnthropicCreateMessageRequest build() {
-            return new AnthropicCreateMessageRequest(
-                    model,
-                    messages,
-                    system,
-                    maxTokens,
-                    stopSequences,
-                    stream,
-                    temperature,
-                    topP,
-                    topK,
-                    tools,
-                    toolChoice,
-                    thinking,
-                    metadata);
+            return new AnthropicCreateMessageRequest(this);
         }
     }
 }
